@@ -1,0 +1,234 @@
+#!/bin/sh
+
+show_help() {
+    echo "Usage:"
+    echo "  bcguard --crypt file1 [file2 ...]"
+    echo "  bcguard --crypt -u recipient file1 [file2 ...]"
+    echo "  bcguard --crypt -k mapping_code file1 [file2 ...]"
+    echo "  bcguard --crypt -u recipient -k mapping_code file1 [file2 ...]"
+    echo "  bcguard --decrypt input.bcg"
+    echo "  bcguard --decrypt -o directory input.bcg"
+    echo ""
+    echo "Options:"
+    echo "  --crypt, -c            Encrypt files"
+    echo "  --decrypt, -d          Decrypt file"
+    echo "  --user-recipient, -u   Specify GPG recipient"
+    echo "  --key-map, -k          Specify mapping code"
+    echo "  --output, -o           Output directory for decryption"
+    echo "  --help, -h             Show this help"
+    echo ""
+    echo "Configuration:"
+    echo "  Create ~/.bcguard with:"
+    echo "    mapping=YOUR_MAPPING_CODE"
+    echo "    recipient=YOUR_GPG_RECIPIENT"
+}
+
+# Load config from file
+load_config() {
+    if [ -f ~/.bcguard ]; then
+        while IFS='=' read -r key value; do
+            case "$key" in
+                mapping) BCGUARD_MAPPING="$value" ;;
+                recipient) BCGUARD_RECIPIENT="$value" ;;
+            esac
+        done < ~/.bcguard
+    fi
+}
+
+# Initialize config
+load_config
+
+generate_output_name() {
+    local first_file="$1"
+    local file_count="$2"
+    
+    if [ "$file_count" -eq 1 ]; then
+        echo "${first_file}.bcg"
+    else
+        base_name="secure"
+        counter=1
+        output_file="${base_name}.bcg"
+        
+        while [ -f "$output_file" ]; do
+            output_file="${base_name}_${counter}.bcg"
+            counter=$((counter + 1))
+        done
+        
+        echo "$output_file"
+    fi
+}
+
+encrypt_files() {
+    output_file=""
+    recipient=""
+    mapping=""
+    files=""
+    
+    # Parse all options first
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -u|--user-recipient)
+                recipient="$2"
+                shift 2
+                ;;
+            -k|--key-map)
+                mapping="$2"
+                shift 2
+                ;;
+            *)
+                files="$files $1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Remove leading space
+    files=$(echo "$files" | sed 's/^ *//')
+    
+    if [ -z "$files" ]; then
+        echo "Error: No files specified for encryption"
+        exit 1
+    fi
+    
+    # Check if files exist
+    for file in $files; do
+        if [ ! -f "$file" ] && [ ! -d "$file" ]; then
+            echo "Error: File or directory '$file' not found"
+            exit 1
+        fi
+    done
+    
+    # Get first file for output naming
+    first_file=$(echo "$files" | awk '{print $1}')
+    file_count=$(echo "$files" | wc -w)
+    
+    # Generate output filename
+    output_file=$(generate_output_name "$first_file" "$file_count")
+    
+    # Check if output file already exists
+    if [ -f "$output_file" ]; then
+        printf "Output file '$output_file' already exists. Overwrite? [y/N]: "
+        read -r overwrite
+        if [ "$overwrite" != "y" ] && [ "$overwrite" != "Y" ]; then
+            echo "Operation cancelled"
+            exit 1
+        fi
+    fi
+    
+    # Get mapping code if not provided via -k
+    if [ -z "$mapping" ]; then
+        mapping="$BCGUARD_MAPPING"
+        if [ -z "$mapping" ]; then
+            echo "Error: Mapping code not specified."
+            echo "Use -k flag, set BCGUARD_MAPPING variable, or create ~/.bcguard file"
+            exit 1
+        fi
+    fi
+    
+    # Get recipient if not provided via -u
+    if [ -z "$recipient" ]; then
+        recipient="$BCGUARD_RECIPIENT"
+    fi
+    
+    echo "Encrypting to: $output_file"
+    
+    # Build command based on whether recipient was provided
+    if [ -n "$recipient" ]; then
+        eval "tar -czf - $files" | gpg -ear "$recipient" | xxd -p | tr '0123456789abcdef' "$mapping" > "$output_file"
+    else
+        eval "tar -czf - $files" | gpg -ea | xxd -p | tr '0123456789abcdef' "$mapping" > "$output_file"
+    fi
+    
+    if [ $? -eq 0 ]; then
+        echo "Successfully encrypted to $output_file"
+    else
+        echo "Error: Encryption failed"
+        rm -f "$output_file"
+        exit 1
+    fi
+}
+
+decrypt_file() {
+    output_dir=""
+    input_file=""
+    
+    # Parse options
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -o|--output)
+                output_dir="$2"
+                shift 2
+                ;;
+            *)
+                input_file="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    if [ -z "$input_file" ]; then
+        echo "Error: No input file specified"
+        exit 1
+    fi
+    
+    if [ ! -f "$input_file" ]; then
+        echo "Error: File '$input_file' not found"
+        exit 1
+    fi
+    
+    # Check if output is a directory (if provided)
+    if [ -n "$output_dir" ]; then
+        if [ -f "$output_dir" ]; then
+            echo "Error: '$output_dir' is a file, not a directory"
+            exit 1
+        fi
+        # Create directory if it doesn't exist
+        mkdir -p "$output_dir"
+    fi
+    
+    printf "Enter mapping code: "
+    read -r mapping
+    
+    # If output directory specified, extract there
+    if [ -n "$output_dir" ]; then
+        echo "Decrypting to directory: $output_dir"
+        cat "$input_file" | tr "$mapping" '0123456789abcdef' | xxd -p -r | gpg -d | tar -xzf - -C "$output_dir"
+        
+        if [ $? -eq 0 ]; then
+            echo "Successfully decrypted to $output_dir"
+        else
+            echo "Error: Decryption failed"
+            exit 1
+        fi
+    else
+        # Extract to current directory (same as command line)
+        cat "$input_file" | tr "$mapping" '0123456789abcdef' | xxd -p -r | gpg -d | tar -xzf -
+        
+        if [ $? -eq 0 ]; then
+            echo "Successfully decrypted to current directory"
+        else
+            echo "Error: Decryption failed"
+            exit 1
+        fi
+    fi
+}
+
+# Parse arguments
+case "$1" in
+    --crypt|-c)
+        shift
+        encrypt_files "$@"
+        ;;
+    --decrypt|-d)
+        shift
+        decrypt_file "$@"
+        ;;
+    --help|-h)
+        show_help
+        ;;
+    *)
+        echo "Error: Unknown option '$1'"
+        echo "Use 'bcguard --help' for usage information"
+        exit 1
+        ;;
+esac
