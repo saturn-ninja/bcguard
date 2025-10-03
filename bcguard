@@ -8,6 +8,7 @@ show_help() {
     echo "  bcguard --crypt -u recipient -k mapping_code file1 [file2 ...]"
     echo "  bcguard --decrypt input.bcg"
     echo "  bcguard --decrypt -o directory input.bcg"
+    echo "  bcguard --generate-mapping"
     echo ""
     echo "Options:"
     echo "  --crypt, -c            Encrypt files"
@@ -15,6 +16,7 @@ show_help() {
     echo "  --user-recipient, -u   Specify GPG recipient"
     echo "  --key-map, -k          Specify mapping code"
     echo "  --output, -o           Output directory for decryption"
+    echo "  --generate-mapping, -g Generate new mapping and update config"
     echo "  --help, -h             Show this help"
     echo ""
     echo "Configuration:"
@@ -37,6 +39,119 @@ load_config() {
 
 # Initialize config
 load_config
+
+# Function to generate random mapping
+generate_mapping() {
+    # Базовый набор символов (A-P)
+    base_chars="ABCDEFGHIJKLMNOP"
+    result=""
+
+    # Создаем массив из символов
+    i=1
+    while [ $i -le 16 ]; do
+        char=$(echo "$base_chars" | cut -c $i)
+        result="$result$char"
+        i=$((i + 1))
+    done
+
+    # Перемешиваем с помощью /dev/urandom
+    shuffled=""
+    remaining="$result"
+
+    while [ -n "$remaining" ]; do
+        # Получаем случайное число от 0 до длины remaining
+        rand_hex=$(dd if=/dev/urandom bs=1 count=1 2>/dev/null | hexdump -e '1/1 "%u"')
+        length=$(echo -n "$remaining" | wc -c)
+        pos=$((rand_hex % length + 1))
+
+        # Извлекаем символ на позиции pos
+        char=$(echo "$remaining" | cut -c $pos)
+        shuffled="$shuffled$char"
+
+        # Удаляем этот символ из remaining
+        if [ $pos -eq 1 ]; then
+            remaining=$(echo "$remaining" | cut -c 2-)
+        elif [ $pos -eq $length ]; then
+            remaining=$(echo "$remaining" | cut -c 1-$((length - 1)))
+        else
+            front=$(echo "$remaining" | cut -c 1-$((pos - 1)))
+            back=$(echo "$remaining" | cut -c $((pos + 1))-)
+            remaining="${front}${back}"
+        fi
+    done
+
+    echo "$shuffled"
+}
+
+# Function to generate and save mapping
+generate_mapping_command() {
+    echo "Start generating your unique mapping"
+    echo "============================================"
+
+    echo "Generate..."
+    mapping=$(generate_mapping)
+
+    sleep 1
+
+    echo ""
+    echo "Done! Generation completed successfully!"
+    echo ""
+
+    # Show existing gpg keys
+    echo "Available GPG keys for use:"
+    echo "---------------------"
+    gpg -k 2>/dev/null | grep -E "^(pub|uid)" | while read -r line; do
+        if echo "$line" | grep -q "^pub"; then
+            echo "$line"
+        else
+            echo "  $line"
+        fi
+    done
+    echo ""
+
+    # Спрашиваем, нужно ли обновить конфиг
+    printf "Save generated mapping to your config at ~/.bcguard? [Y/n]: "
+    read -r save_config
+    
+    if [ "$save_config" = "n" ] || [ "$save_config" = "N" ]; then
+        echo ""
+        echo "Successfully!"
+        echo "=============================="
+        return 0
+    fi
+
+    # Обновляем конфиг
+    echo "mapping=$mapping" > ~/.bcguard
+    
+    # Спрашиваем про получателя
+    printf "Do you want to specify the default GPG recipient in the config? [Y/n]: "
+    read -r set_recipient
+    
+    if [ "$set_recipient" != "n" ] && [ "$set_recipient" != "N" ]; then
+        printf "Choose recipient of gpg (email or ID): "
+        read -r recipient
+        if [ -n "$recipient" ]; then
+            echo "recipient=$recipient" >> ~/.bcguard
+            echo "The recipient '$recipient' has been successfully added to configuration."
+        fi
+    else
+        echo "The recipient is not specified. You can specify it during encryption using the -u flag."
+    fi
+
+    echo ""
+    echo "Configuration updated successfully!"
+    echo ""
+    echo "Now you can use bcguard commands:"
+    echo "  bcguard -c file.txt                    # for encryption"
+    echo "  bcguard -c -u recipient file.txt       # if a different recipient is needed"
+    echo "  bcguard -d file.txt.bcg                # for decryption"
+    echo ""
+    echo ""
+    echo ""
+    echo "! ! ! Warning ! ! !"
+    echo ""
+    echo "Be careful! Save a backup copy of your mapping in a safe place! Your mapping is your key to decrypting your files"
+}
 
 generate_output_name() {
     local first_file="$1"
@@ -283,6 +398,9 @@ case "$1" in
     --decrypt|-d)
         shift
         decrypt_file "$@"
+        ;;
+    --generate-mapping|-g)
+        generate_mapping_command
         ;;
     --help|-h)
         show_help
