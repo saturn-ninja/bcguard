@@ -1,5 +1,13 @@
 #!/bin/sh
 
+# Colors for prompt
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
 show_help() {
     echo "Usage:"
     echo "  bcguard --crypt file1 [file2 ...]"
@@ -95,6 +103,7 @@ generate_mapping_command() {
 
     echo ""
     echo "Done! Generation completed successfully!"
+    echo -e "${NC}Your mapping: ${GREEN}$mapping${NC}"
     echo ""
 
     # Show existing gpg keys
@@ -148,9 +157,13 @@ generate_mapping_command() {
     echo ""
     echo ""
     echo ""
-    echo "! ! ! Warning ! ! !"
+    echo -e "${RED}!!!Warning!!!${NC}"
     echo ""
-    echo "Be careful! Save a backup copy of your mapping in a safe place! Your mapping is your key to decrypting your files"
+    echo -e "${RED}Be careful! Save a backup copy of your mapping in a safe place! Your mapping is your key to decrypting your files${NC}"
+    echo ""
+    echo ""
+    echo ""
+
 }
 
 generate_output_name() {
